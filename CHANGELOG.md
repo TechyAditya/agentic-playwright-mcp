@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-09-26
+
+### Changed
+
+- Reworked the package README around the `npx --yes agentic-playwright-mcp` setup.
+- Changed documentation links to absolute GitHub URLs so they work on npmjs.com.
+
 ## [1.0.0] - 2026-09-26
 
 Registers 15 more tools, for 29 in total, and keeps the tab isolation Playwright MCP does not have.
