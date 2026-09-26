@@ -4,39 +4,24 @@ Tab isolation in this fork is logical. The server tracks which `targetId` belong
 `groupId` in `~/.agentic-playwright-mcp/tab-groups.json`, and that works on any Chrome.
 
 Colouring those groups in Chrome's tab strip is a separate problem. Chrome exposes tab
-groups only through the `chrome.tabGroups` extension API, never through CDP, so the server
-ships a companion extension in `extensions/tab-grouper`. When the extension does not load,
+groups through the `chrome.tabGroups` extension API, so the server ships a companion
+extension in `extensions/tab-grouper`. After Chrome starts, the daemon loads the extension
+with the CDP `Extensions.loadUnpacked` command. When that command fails,
 `browser_tab_group` says `Visual grouping: unavailable` and keeps working. You lose the
-colours, not the isolation.
+native Chrome group data, not the isolation.
 
-## Why the extension often fails to load
+## How extension loading works
 
 Chrome 137 removed `--load-extension` from branded builds after malware abused it. The
-flag is now ignored in silence. An error would at least be diagnosable.
+daemon retains that flag for older Chromium builds, but it does not rely on the flag.
+The daemon first calls `Extensions.loadUnpacked` through the browser CDP session. Chrome
+154 accepts this command over `--remote-debugging-port`.
 
-Two CDP paths look like alternatives and are not:
+The npm package includes `extensions/tab-grouper`. When the extension loads,
+`browser_tab_group` lists native Chrome groups, including groups created by hand, and
+`browser_tabs` shows each tab's Chrome group title.
 
-- `Extensions.loadUnpacked` needs `--remote-debugging-pipe`. Playwright connects over a
-  WebSocket, which needs `--remote-debugging-port`. The two flags cannot be combined.
-- Passing both flags makes Chrome exit with code 13 and no message.
-
-On a branded Chrome 137 or newer, the daemon cannot load the extension for you.
-
-## What works instead
-
-Chrome for Testing still honours `--load-extension`, and the daemon prefers it when it
-finds one. Install it with:
-
-```bash
-npx @puppeteer/browsers install chrome@stable
-```
-
-The daemon looks in the puppeteer cache, then the Playwright cache, then the system install
-locations, and falls back to branded Chrome. To point it at a specific binary, pass
-`--chrome-executable`, described in the [CLI reference](cli.md).
-
-The other option is to install the extension by hand once. It then persists in the profile
-on any Chrome version:
+If CDP loading fails, install the extension by hand once. It then persists in the profile:
 
 1. Start Chrome with the server's profile:
    `chrome --user-data-dir=~/.agentic-playwright-mcp/chrome-profile`
@@ -44,8 +29,8 @@ on any Chrome version:
 3. Turn on developer mode.
 4. Choose "Load unpacked" and select `extensions/tab-grouper`.
 
-On a corporate machine with managed Chrome, expect neither path to work. Logical grouping
-is the answer there, and a person watching the run can tell tabs apart by title or URL.
+On a corporate machine with managed Chrome, policy can block both paths. Logical grouping
+continues to work there.
 
 ## Sources
 

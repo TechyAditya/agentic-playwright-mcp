@@ -273,7 +273,7 @@ Accessibility tree of the page, with refs (e1, e2) for click, type, hover. Only 
 
 ## `browser_tab_group`
 
-Manage tab groups for session isolation. Actions: create, list, delete. create: returns groupId. Pass it to browser_tabs. list: all groups with tab counts. delete: removes the group and closes its tabs, unless closeTabs is false. When agents share one browser, each creates its own group, so one agent never lists or closes another agent's tabs.
+Manage tab groups for session isolation. Actions: create, list, delete. create: returns groupId. Pass it to browser_tabs. list: MCP isolation groups and native Chrome groups with tab counts. delete: removes the group and closes its tabs, unless closeTabs is false. A group is removed automatically after its last tab closes. Prefer a human-readable group name under 20 characters. When agents share one browser, each creates its own group, so one agent never lists or closes another agent's tabs.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -281,11 +281,11 @@ Manage tab groups for session isolation. Actions: create, list, delete. create: 
 | `closeTabs` | boolean | no | Close the group's tabs on delete. Default true. |
 | `color` | `grey` \| `blue` \| `red` \| `yellow` \| `green` \| `pink` \| `purple` \| `cyan` | no | Group colour in Chrome, for action create. Needs companion extension. |
 | `groupId` | string | no | Group name, for action delete. |
-| `name` | string | no | Group name, for action create. |
+| `name` | string | no | Group name, for action create. Prefer a human-readable name under 20 characters. |
 
 ## `browser_tabs`
 
-Manage tabs. Actions: list, new, close, select. list: with groupId, only that group's tabs. Without groupId, all tabs. new: creates tab and returns its targetId. Keep that id for every later call. close, select: pass targetId or index. When more than one agent shares this browser, create a group with browser_tab_group first and pass groupId. Ungrouped tabs still work for one agent.
+Manage tabs. Actions: list, new, close, select. list: with groupId, only that MCP group's tabs. Without groupId, all tabs. When the companion extension is available, each tab also shows its native Chrome group. new: creates tab and returns its targetId. Keep that id for every later call. close, select: pass targetId or index. When more than one agent shares this browser, create a group with browser_tab_group first and pass groupId. Ungrouped tabs still work for one agent.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |

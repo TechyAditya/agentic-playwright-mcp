@@ -78,6 +78,10 @@ Cookies, local storage, and sign-in state remain shared because all groups use t
 Chrome profile. A person can complete an interactive sign-in, then the agent can continue
 on the same `targetId`.
 
+The package includes a companion extension and loads it through CDP when Chrome starts.
+When Chrome allows the extension, group listings include native groups that a person made
+in the tab strip. If browser policy blocks the extension, MCP group isolation still works.
+
 ## Security
 
 `browser_run_code_unsafe` runs JavaScript with access to the selected Playwright page.

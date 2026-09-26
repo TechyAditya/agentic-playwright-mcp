@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   addTabToGroup,
   createTabGroup,
   deleteTabGroup,
+  EMPTY_GROUP_GRACE_MS,
   getChromeTabId,
   getExtensionId,
   getGroupForTab,
@@ -110,6 +111,46 @@ describe("tab group registry", () => {
       removed: true,
       ungroupedTargetIds: ["target-2"],
     });
+  });
+
+  it("removes a group when its last tab is removed", () => {
+    const cdp = "http://localhost:9223";
+    createTabGroup(cdp, { name: "temporary" });
+    addTabToGroup(cdp, "target-1", "temporary");
+
+    removeTabFromGroup(cdp, "target-1");
+
+    expect(getTabGroup(cdp, "temporary")).toBeNull();
+  });
+
+  it("removes a group when pruning its last stale tab", () => {
+    const cdp = "http://localhost:9223";
+    createTabGroup(cdp, { name: "stale" });
+    addTabToGroup(cdp, "target-1", "stale");
+
+    expect(pruneStaleTargets(cdp, [])).toBe(1);
+    expect(getTabGroup(cdp, "stale")).toBeNull();
+  });
+
+  it("keeps a new empty group during the create-tab grace period", () => {
+    const cdp = "http://localhost:9223";
+    createTabGroup(cdp, { name: "pending" });
+
+    pruneStaleTargets(cdp, []);
+
+    expect(getTabGroup(cdp, "pending")).not.toBeNull();
+  });
+
+  it("removes an unused group after the create-tab grace period", () => {
+    const cdp = "http://localhost:9223";
+    createTabGroup(cdp, { name: "abandoned" });
+    const data = JSON.parse(readFileSync(registryPath, "utf-8"));
+    data.groups.abandoned.createdAt = Date.now() - EMPTY_GROUP_GRACE_MS - 1;
+    writeFileSync(registryPath, JSON.stringify(data), "utf-8");
+
+    pruneStaleTargets(cdp, []);
+
+    expect(getTabGroup(cdp, "abandoned")).toBeNull();
   });
 
   it("gives a tab the group its opener is in", () => {

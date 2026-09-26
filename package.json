@@ -1,6 +1,6 @@
 {
   "name": "agentic-playwright-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Fork of official Playwright MCP with multi-agent tab isolation via targetId",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,6 +19,7 @@
   },
   "files": [
     "dist",
+    "extensions",
     "README.md",
     "LICENSE"
   ],

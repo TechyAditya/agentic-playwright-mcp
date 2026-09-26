@@ -10,7 +10,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { resolve as resolvePath } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
 import WebSocket from "ws";
 import { getHeadersWithAuth } from "./cdp.helpers.js";
 // Extension ID is cached in-memory (no file dependency)
@@ -42,6 +43,21 @@ interface CDPResponse {
   error?: { message: string };
 }
 
+export interface VisualTabGroup {
+  id: number;
+  title: string;
+  color: string;
+  collapsed: boolean;
+}
+
+export interface VisualChromeTab {
+  id: number;
+  url: string;
+  title: string;
+  groupId: number;
+  targetId?: string;
+}
+
 // ── Find the extension service worker ──────────────────────────────────────
 
 let cachedSwUrl: string | null = null;
@@ -55,7 +71,18 @@ let cachedExtensionId: string | null = null;
  */
 export function computeExtensionId(extensionPath: string): string {
   const abs = resolvePath(extensionPath);
-  const hash = createHash("sha256").update(abs).digest();
+  let idSource: Buffer | string = abs;
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(abs, "manifest.json"), "utf-8"),
+    ) as { key?: string };
+    if (manifest.key) {
+      idSource = Buffer.from(manifest.key, "base64");
+    }
+  } catch {
+    // Extensions without a fixed manifest key derive their ID from the path.
+  }
+  const hash = createHash("sha256").update(idSource).digest();
   let id = "";
   for (let i = 0; i < 16; i++) {
     const byte = hash[i];
@@ -400,6 +427,73 @@ export async function isTabGrouperAvailable(cdpUrl: string): Promise<boolean> {
 }
 
 /**
+ * Load an unpacked extension through Chrome's browser-level CDP session.
+ */
+export async function loadUnpackedExtension(
+  cdpUrl: string,
+  extensionPath: string,
+): Promise<string> {
+  const baseUrl = cdpUrl
+    .replace(/\/+$/, "")
+    .replace(/^ws:/, "http:")
+    .replace(/\/cdp$/, "");
+  const versionUrl = `${baseUrl}/json/version`;
+  const response = await fetch(versionUrl, {
+    signal: AbortSignal.timeout(3000),
+    headers: getHeadersWithAuth(versionUrl),
+  });
+  if (!response.ok) {
+    throw new Error(`Could not read Chrome CDP version: HTTP ${response.status}`);
+  }
+  const version = (await response.json()) as { webSocketDebuggerUrl?: string };
+  if (!version.webSocketDebuggerUrl) {
+    throw new Error("Chrome did not return a browser WebSocket URL");
+  }
+
+  return await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error("Extensions.loadUnpacked timed out"));
+    }, 10_000);
+    const socket = new WebSocket(version.webSocketDebuggerUrl!);
+
+    socket.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    socket.on("open", () => {
+      socket.send(JSON.stringify({
+        id: 1,
+        method: "Extensions.loadUnpacked",
+        params: { path: resolvePath(extensionPath) },
+      }));
+    });
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as {
+        id?: number;
+        result?: { id?: string };
+        error?: { message?: string };
+      };
+      if (message.id !== 1) {
+        return;
+      }
+      clearTimeout(timer);
+      socket.close();
+      if (message.error) {
+        reject(new Error(message.error.message || "Extensions.loadUnpacked failed"));
+        return;
+      }
+      if (!message.result?.id) {
+        reject(new Error("Extensions.loadUnpacked returned no extension ID"));
+        return;
+      }
+      cachedExtensionId = message.result.id;
+      resolve(message.result.id);
+    });
+  });
+}
+
+/**
  * Get the Chrome tab ID for a given URL + title combo.
  * We need this to bridge CDP targetId → Chrome tab ID.
  */
@@ -440,14 +534,20 @@ export async function mapTargetIdsToChromeTabIds(
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
 
-  let chromeTabs: Array<{ id: number; url: string; title: string; groupId: number }>;
+  let chromeTabs: VisualChromeTab[];
   try {
     chromeTabs = (await evalOnExtension(cdpUrl, `queryTabs()`)) as typeof chromeTabs;
   } catch {
     return result;
   }
 
-  // Build URL → chrome tabs index
+  const byTargetId = new Map(
+    chromeTabs
+      .filter((tab) => tab.targetId)
+      .map((tab) => [tab.targetId as string, tab.id]),
+  );
+
+  // Build URL → chrome tabs index as a fallback for older companion extensions.
   const byUrl = new Map<string, Array<{ id: number; title: string }>>();
   for (const ct of chromeTabs) {
     const list = byUrl.get(ct.url) || [];
@@ -456,6 +556,11 @@ export async function mapTargetIdsToChromeTabIds(
   }
 
   for (const target of targets) {
+    const exactTabId = byTargetId.get(target.targetId);
+    if (exactTabId !== undefined) {
+      result.set(target.targetId, exactTabId);
+      continue;
+    }
     const candidates = byUrl.get(target.url);
     if (!candidates?.length) continue;
 
@@ -526,13 +631,15 @@ export async function updateVisualGroup(
  */
 export async function listVisualTabGroups(
   cdpUrl: string,
-): Promise<Array<{ id: number; title: string; color: string; collapsed: boolean }>> {
-  return (await evalOnExtension(cdpUrl, `listTabGroups()`)) as Array<{
-    id: number;
-    title: string;
-    color: string;
-    collapsed: boolean;
-  }>;
+): Promise<VisualTabGroup[]> {
+  return (await evalOnExtension(cdpUrl, `listTabGroups()`)) as VisualTabGroup[];
+}
+
+/**
+ * List Chrome tabs with their native group ID and CDP target ID.
+ */
+export async function listVisualTabs(cdpUrl: string): Promise<VisualChromeTab[]> {
+  return (await evalOnExtension(cdpUrl, `queryTabs()`)) as VisualChromeTab[];
 }
 
 /**

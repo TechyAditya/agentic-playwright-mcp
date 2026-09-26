@@ -12,6 +12,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { globSync } from "glob";
 import { resolveExtensions } from "../utils/extension-installer.js";
+import { loadUnpackedExtension } from "../browser/chrome-tab-groups.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +35,8 @@ class ChromeDaemon {
   private shuttingDown = false;
   private monitorInterval: NodeJS.Timeout | null = null;
   private config: ChromeDaemonConfig;
+  private extensionPaths: string[] = [];
+  private extensionsLoaded = false;
 
   constructor(config?: ChromeDaemonConfig) {
     this.config = config || {};
@@ -71,6 +74,9 @@ class ChromeDaemon {
     });
 
     this.log("Chrome daemon started");
+
+    const userDataDir = this.config.chromeUserDataDir || DEFAULT_CHROME_PROFILE;
+    this.extensionPaths = await this.prepareExtensionPaths(userDataDir);
 
     // Start Chrome and keep it alive
     await this.ensureChromeRunning();
@@ -116,11 +122,61 @@ class ChromeDaemon {
     // On Windows, Chrome's parent process may exit after spawning children.
     // Check if Chrome is actually reachable before restarting.
     if (await this.isChromeReachable()) {
+      await this.loadExtensionsViaCDP();
       return;
     }
 
     this.log("Starting Chrome...");
     await this.startChrome();
+    await this.loadExtensionsViaCDP();
+  }
+
+  private async prepareExtensionPaths(userDataDir: string): Promise<string[]> {
+    const allExtensions = [...(this.config.chromeExtensions || [])];
+    const bundledTabGrouper = path.join(__dirname, "..", "..", "extensions", "tab-grouper");
+    if (fs.existsSync(bundledTabGrouper) && !allExtensions.some((entry) => entry.includes("tab-grouper"))) {
+      allExtensions.push(bundledTabGrouper);
+      this.log("Auto-including bundled tab-grouper extension");
+    }
+    if (allExtensions.length === 0) {
+      return [];
+    }
+
+    this.enableDeveloperMode(userDataDir);
+    try {
+      const extensionPaths = await resolveExtensions(allExtensions);
+      if (extensionPaths.length > 0) {
+        this.log(`Prepared extensions: ${extensionPaths.join(",")}`);
+      }
+      return extensionPaths;
+    } catch (error) {
+      this.log(`WARNING: Failed to resolve extensions: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+  }
+
+  private async loadExtensionsViaCDP(): Promise<void> {
+    if (this.extensionsLoaded || this.extensionPaths.length === 0) {
+      return;
+    }
+
+    let loaded = 0;
+    for (const extensionPath of this.extensionPaths) {
+      try {
+        const extensionId = await loadUnpackedExtension(
+          `http://localhost:${CDP_PORT}`,
+          extensionPath,
+        );
+        this.log(`Loaded extension through CDP: ${extensionPath} (${extensionId})`);
+        loaded += 1;
+      } catch (error) {
+        this.log(
+          `WARNING: Failed to load extension through CDP: ${extensionPath}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    this.extensionsLoaded = loaded === this.extensionPaths.length;
   }
 
   private async isChromeReachable(): Promise<boolean> {
@@ -265,38 +321,8 @@ class ChromeDaemon {
       "--disable-automation",                            // disables automation extension
     ];
 
-    // Always include bundled tab-grouper extension + any user-configured extensions
-    {
-      const allExtensions = [...(this.config.chromeExtensions || [])];
-
-      // Auto-include bundled tab-grouper extension
-      const bundledTabGrouper = path.join(__dirname, "..", "..", "extensions", "tab-grouper");
-      if (fs.existsSync(bundledTabGrouper) && !allExtensions.some(e => e.includes("tab-grouper"))) {
-        allExtensions.push(bundledTabGrouper);
-        this.log(`Auto-including bundled tab-grouper extension`);
-      }
-
-      if (allExtensions.length > 0) {
-        // Ensure developer mode is enabled for extensions
-        this.enableDeveloperMode(userDataDir);
-
-        try {
-          const extensionPaths = await resolveExtensions(allExtensions);
-          if (extensionPaths.length > 0) {
-            const pathsStr = extensionPaths.join(",");
-            args.push(`--load-extension=${pathsStr}`);
-            this.log(`Loading extensions: ${pathsStr}`);
-
-            // Warn if using branded Chrome 137+
-            if (chromePath.includes("Google Chrome.app") && !chromePath.includes("Chrome for Testing")) {
-              this.log("WARNING: Using branded Chrome may not support --load-extension in version 137+");
-              this.log("         Recommend installing Chrome for Testing for guaranteed extension support");
-            }
-          }
-        } catch (error) {
-          this.log(`WARNING: Failed to resolve extensions: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
+    if (this.extensionPaths.length > 0) {
+      args.push(`--load-extension=${this.extensionPaths.join(",")}`);
     }
 
     this.chromeProcess = spawn(chromePath, args, {
@@ -307,6 +333,7 @@ class ChromeDaemon {
     this.chromeProcess.on("exit", (code) => {
       this.log(`Chrome exited with code ${code}`);
       this.chromeProcess = null;
+      this.extensionsLoaded = false;
       if (!this.shuttingDown) {
         if (this.shouldKeepAlive()) {
           this.log("Chrome exited unexpectedly, will restart...");

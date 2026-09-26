@@ -17,6 +17,7 @@ interface StoredTabGroup {
   color: string;
   createdAt: number;
   chromeGroupId?: number;
+  hasOwnedTabs?: boolean;
 }
 
 interface StoredTabEntry {
@@ -45,6 +46,8 @@ export const VALID_COLORS = [
 ] as const;
 
 export type TabGroupColor = (typeof VALID_COLORS)[number];
+
+export const EMPTY_GROUP_GRACE_MS = 60_000;
 
 export function isValidColor(c: string): c is TabGroupColor {
   return (VALID_COLORS as readonly string[]).includes(c);
@@ -168,6 +171,33 @@ function getStoredGroup(registry: TabGroupRegistry, name: string): StoredTabGrou
   return registry.groups[name] ?? null;
 }
 
+function removeGroupIfEmpty(
+  registry: TabGroupRegistry,
+  name: string,
+  now = Date.now(),
+): boolean {
+  const group = registry.groups[name];
+  if (!group) {
+    return false;
+  }
+  const hasTabs = Object.values(registry.tabs).some((entry) => entry.groupName === name);
+  if (hasTabs) {
+    return false;
+  }
+  const newUnusedGroup = group.hasOwnedTabs === false;
+  if (newUnusedGroup && now - group.createdAt < EMPTY_GROUP_GRACE_MS) {
+    return false;
+  }
+  delete registry.groups[name];
+  return true;
+}
+
+function removeExpiredEmptyGroups(registry: TabGroupRegistry, now = Date.now()): void {
+  for (const name of Object.keys(registry.groups)) {
+    removeGroupIfEmpty(registry, name, now);
+  }
+}
+
 function buildGroupView(name: string, group: StoredTabGroup, registry: TabGroupRegistry): TabGroup {
   const tabs = Object.entries(registry.tabs)
     .filter(([, entry]) => entry.groupName === name)
@@ -206,7 +236,7 @@ export function createTabGroup(
     }
 
     const createdAt = Date.now();
-    registry.groups[name] = { color, createdAt };
+    registry.groups[name] = { color, createdAt, hasOwnedTabs: false };
     return { name, color, createdAt, created: true };
   });
 }
@@ -270,11 +300,17 @@ export function addTabToGroup(
       throw new Error(`Tab group not found: ${groupName}`);
     }
 
+    const previousGroupName = registry.tabs[targetId]?.groupName;
     registry.tabs[targetId] = {
       groupName,
       addedAt: Date.now(),
       ...(chromeTabId !== undefined ? { chromeTabId } : {}),
     };
+    group.hasOwnedTabs = true;
+
+    if (previousGroupName && previousGroupName !== groupName) {
+      removeGroupIfEmpty(registry, previousGroupName);
+    }
 
     return { chromeGroupId: group.chromeGroupId ?? null };
   });
@@ -303,7 +339,11 @@ export function inheritGroupFromOpener(
 
 export function removeTabFromGroup(_cdpUrl: string, targetId: string): void {
   withRegistry((registry) => {
+    const groupName = registry.tabs[targetId]?.groupName;
     delete registry.tabs[targetId];
+    if (groupName) {
+      removeGroupIfEmpty(registry, groupName);
+    }
   });
 }
 
@@ -333,12 +373,18 @@ export function pruneStaleTargets(
 
   return withRegistry((registry) => {
     let pruned = 0;
+    const affectedGroups = new Set<string>();
     for (const targetId of Object.keys(registry.tabs)) {
       if (!liveTargetIds.has(targetId)) {
+        affectedGroups.add(registry.tabs[targetId].groupName);
         delete registry.tabs[targetId];
         pruned += 1;
       }
     }
+    for (const groupName of affectedGroups) {
+      removeGroupIfEmpty(registry, groupName);
+    }
+    removeExpiredEmptyGroups(registry);
     return pruned;
   });
 }

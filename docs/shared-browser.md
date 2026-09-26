@@ -25,6 +25,12 @@ Nothing warns you. Every call succeeds against the wrong page.
 
 A group hides your tabs from other agents. `browser_tabs` with `action: "list"` and your
 `groupId` returns only your tabs, and the server rejects a `targetId` from another group.
+The server removes the group after its last tab closes. A new empty group remains available
+for 60 seconds so the next call can create its first tab.
+
+The bundled extension loads through CDP when Chrome starts. When it is available,
+`browser_tab_group` also lists native Chrome groups that a person created, and
+`browser_tabs` labels their tabs. These native labels do not change MCP ownership.
 
 A tab the page opens for itself joins the group its opener is in. A product link with
 `target="_blank"` therefore stays yours, and it appears in your group's listing without

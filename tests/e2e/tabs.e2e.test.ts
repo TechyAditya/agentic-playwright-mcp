@@ -107,6 +107,23 @@ describe("tab groups and tabs", () => {
     expect(remaining).not.toContain(throwaway);
   });
 
+  it("removes a group after its last tab closes", async () => {
+    const emptyGroup = `${session.group}-auto-cleanup`;
+    await session.client.callOk("browser_tab_group", { action: "create", name: emptyGroup });
+    const created = await session.client.callOk("browser_tabs", {
+      action: "new",
+      groupId: emptyGroup,
+      url: `${session.baseUrl}/second.html`,
+    });
+    const targetId = /[A-F0-9]{32}/.exec(created)?.[0];
+    expect(targetId).toBeTruthy();
+
+    await session.client.callOk("browser_close", { targetId });
+    const groups = await session.client.callOk("browser_tab_group", { action: "list" });
+
+    expect(groups).not.toContain(emptyGroup);
+  });
+
   it("lists groups", async () => {
     const output = await session.client.callOk("browser_tab_group", { action: "list" });
     expect(output).toContain(session.group);

@@ -320,12 +320,21 @@ globalThis.listTabGroups = async function listTabGroups(windowId) {
  * Query all tabs with their groupId.
  */
 globalThis.queryTabs = async function queryTabs() {
-  const tabs = await chrome.tabs.query({});
+  const [tabs, targets] = await Promise.all([
+    chrome.tabs.query({}),
+    chrome.debugger.getTargets().catch(() => []),
+  ]);
+  const targetIdByTabId = new Map(
+    targets
+      .filter(target => target.tabId !== undefined)
+      .map(target => [target.tabId, target.id]),
+  );
   return tabs.map(t => ({
     id: t.id,
     url: t.url,
     title: t.title,
     groupId: t.groupId,
+    targetId: targetIdByTabId.get(t.id),
   }));
 };
 

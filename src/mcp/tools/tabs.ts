@@ -27,6 +27,8 @@ import {
   isTabGrouperAvailable,
   createTabViaExtension,
   closeTabViaExtension,
+  listVisualTabGroups,
+  listVisualTabs,
 } from "../../browser/chrome-tab-groups.js";
 
 export function registerBrowserTabsTool(
@@ -36,7 +38,8 @@ export function registerBrowserTabsTool(
   register(
     "browser_tabs",
     "Manage tabs. Actions: list, new, close, select.\n" +
-      "list: with groupId, only that group's tabs. Without groupId, all tabs.\n" +
+      "list: with groupId, only that MCP group's tabs. Without groupId, all tabs. " +
+      "When the companion extension is available, each tab also shows its native Chrome group.\n" +
       "new: creates tab and returns its targetId. Keep that id for every later call.\n" +
       "close, select: pass targetId or index.\n" +
       "When more than one agent shares this browser, create a group with browser_tab_group " +
@@ -138,14 +141,42 @@ export function registerBrowserTabsTool(
             return "**No tabs open.**";
           }
 
+          const chromeGroupByTargetId = new Map<string, string>();
+          try {
+            const [visualGroups, visualTabs] = await Promise.all([
+              listVisualTabGroups(cdp),
+              listVisualTabs(cdp),
+            ]);
+            const titleByGroupId = new Map(
+              visualGroups.map((group) => [group.id, group.title.trim() || "(untitled)"]),
+            );
+            for (const visualTab of visualTabs) {
+              if (!visualTab.targetId) {
+                continue;
+              }
+              const title = titleByGroupId.get(visualTab.groupId);
+              if (title) {
+                chromeGroupByTargetId.set(visualTab.targetId, title);
+              }
+            }
+          } catch {
+            // Extension is optional.
+          }
+
           const output = tabs
             .map((tab, tabIndex) => {
-              const groupLabel = !groupId
-                ? (() => {
-                    const tabGroup = getGroupForTab(cdp, tab.targetId);
-                    return tabGroup ? ` [${tabGroup}]` : " [ungrouped]";
-                  })()
-                : "";
+              const labels: string[] = [];
+              const tabGroup = getGroupForTab(cdp, tab.targetId);
+              if (tabGroup) {
+                labels.push(`MCP group: ${tabGroup}`);
+              }
+              const chromeGroup = chromeGroupByTargetId.get(tab.targetId);
+              if (chromeGroup) {
+                labels.push(`Chrome group: ${chromeGroup}`);
+              }
+              const groupLabel = labels.length > 0
+                ? ` [${labels.join(" | ")}]`
+                : " [ungrouped]";
 
               return (
                 `[${tabIndex}] **targetId: ${tab.targetId}**${groupLabel}\n` +

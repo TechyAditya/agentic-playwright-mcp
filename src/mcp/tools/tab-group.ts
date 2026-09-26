@@ -23,6 +23,8 @@ import {
   ungroupTabsVisually,
   mapTargetIdsToChromeTabIds,
   listVisualTabGroups,
+  listVisualTabs,
+  type VisualTabGroup,
 } from "../../browser/chrome-tab-groups.js";
 
 export function registerBrowserTabGroupTool(
@@ -33,8 +35,10 @@ export function registerBrowserTabGroupTool(
     "browser_tab_group",
     "Manage tab groups for session isolation. Actions: create, list, delete.\n" +
       "create: returns groupId. Pass it to browser_tabs.\n" +
-      "list: all groups with tab counts.\n" +
+      "list: MCP isolation groups and native Chrome groups with tab counts.\n" +
       "delete: removes the group and closes its tabs, unless closeTabs is false.\n" +
+      "A group is removed automatically after its last tab closes.\n" +
+      "Prefer a human-readable group name under 20 characters.\n" +
       "When agents share one browser, each creates its own group, so one agent never lists or " +
       "closes another agent's tabs.",
     {
@@ -47,7 +51,8 @@ export function registerBrowserTabGroupTool(
         },
         name: {
           type: "string",
-          description: "Group name, for action create.",
+          description:
+            "Group name, for action create. Prefer a human-readable name under 20 characters.",
         },
         color: {
           type: "string",
@@ -118,18 +123,31 @@ export function registerBrowserTabGroupTool(
           }
 
           const groups = listTabGroups(config.cdpEndpoint);
-          if (groups.length === 0) {
-            return "**No tab groups exist.**\nCreate one with browser_tab_group({ action: 'create', name: '...' })";
-          }
 
-          let visualGroups: Array<{ id: number; title: string; color: string }> = [];
+          let visualGroups: VisualTabGroup[] = [];
+          let visualTabCounts = new Map<number, number>();
           try {
-            visualGroups = await listVisualTabGroups(config.cdpEndpoint);
+            [visualGroups, visualTabCounts] = await Promise.all([
+              listVisualTabGroups(config.cdpEndpoint),
+              listVisualTabs(config.cdpEndpoint).then((tabs) => {
+                const counts = new Map<number, number>();
+                for (const tab of tabs) {
+                  if (tab.groupId >= 0) {
+                    counts.set(tab.groupId, (counts.get(tab.groupId) ?? 0) + 1);
+                  }
+                }
+                return counts;
+              }),
+            ]);
           } catch {
             // Extension is optional.
           }
 
-          const output = groups
+          if (groups.length === 0 && visualGroups.length === 0) {
+            return "**No tab groups exist.**\nCreate one with browser_tab_group({ action: 'create', name: '...' })";
+          }
+
+          const logicalOutput = groups
             .map((group) => {
               const visual = group.chromeGroupId
                 ? visualGroups.find((candidate) => candidate.id === group.chromeGroupId)
@@ -145,7 +163,25 @@ export function registerBrowserTabGroupTool(
             })
             .join("\n\n");
 
-          return `**${groups.length} tab group(s)**\n\n${output}`;
+          const visualOutput = visualGroups
+            .map((group) => {
+              const title = group.title.trim() || "(untitled)";
+              const tabs = visualTabCounts.get(group.id) ?? 0;
+              return (
+                `• **${title}**\n` +
+                `  Chrome group ID: ${group.id} | Tabs: ${tabs} | Color: ${group.color}`
+              );
+            })
+            .join("\n\n");
+
+          const sections: string[] = [];
+          if (groups.length > 0) {
+            sections.push(`**${groups.length} MCP tab group(s)**\n\n${logicalOutput}`);
+          }
+          if (visualGroups.length > 0) {
+            sections.push(`**${visualGroups.length} Chrome tab group(s)**\n\n${visualOutput}`);
+          }
+          return sections.join("\n\n");
         }
 
         case "delete": {

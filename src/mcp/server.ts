@@ -21,7 +21,11 @@ import { registerBrowserCheckpointTools } from "./tools/checkpoint.js";
 import { registerBrowserRunCodeTool } from "./tools/run-code.js";
 import { registerBrowserActivityTools } from "./tools/activity.js";
 import { registerBrowserPageTools } from "./tools/page-tools.js";
-import { warmupTabGrouper, seedExtensionIdFromPath } from "../browser/chrome-tab-groups.js";
+import {
+  loadUnpackedExtension,
+  warmupTabGrouper,
+  seedExtensionIdFromPath,
+} from "../browser/chrome-tab-groups.js";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -30,6 +34,15 @@ import { fileURLToPath } from "node:url";
 const { version: PACKAGE_VERSION } = createRequire(import.meta.url)(
   "../../package.json",
 ) as { version: string };
+
+const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+const bundledTabGrouperPath = join(
+  moduleDirectory,
+  "..",
+  "..",
+  "extensions",
+  "tab-grouper",
+);
 
 type ServerRuntimeOptions = {
   lazyDaemonStart?: boolean;
@@ -57,6 +70,23 @@ export async function createMCPServer(
     inputSchema: ToolInputSchema;
     handler: ToolHandler;
   }>();
+  let extensionLoadAttempted = false;
+
+  async function ensureBundledTabGrouper(): Promise<void> {
+    if (extensionLoadAttempted || !config.cdpEndpoint || !existsSync(bundledTabGrouperPath)) {
+      return;
+    }
+    extensionLoadAttempted = true;
+    try {
+      await loadUnpackedExtension(config.cdpEndpoint, bundledTabGrouperPath);
+      await warmupTabGrouper(config.cdpEndpoint);
+    } catch (error) {
+      console.error(
+        "Companion extension unavailable; logical tab groups remain active:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
 
   // Helper to register tools
   const registerTool: RegisterToolFn = (name, description, inputSchema, handler) => {
@@ -105,6 +135,7 @@ export async function createMCPServer(
           keepAlive: config.keepAlive,
         });
       }
+      await ensureBundledTabGrouper();
 
       const result = await tool.handler(args || {});
 
@@ -163,11 +194,8 @@ export async function runServer(config: ServerConfig) {
 
   // Seed the companion extension ID so we can wake it when its SW goes dormant.
   // Look for the bundled extension relative to this file, or in the configured extensions.
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  const bundledExtPath = join(__dirname, "..", "..", "extensions", "tab-grouper");
-  if (existsSync(bundledExtPath)) {
-    seedExtensionIdFromPath(bundledExtPath);
+  if (existsSync(bundledTabGrouperPath)) {
+    seedExtensionIdFromPath(bundledTabGrouperPath);
   }
   // Also check if it's in the configured extensions list
   if (config.chromeExtensions) {

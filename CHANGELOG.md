@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-26
+
+### Added
+
+- Include the companion tab-group extension in the npm package.
+- Load the bundled tab-group extension automatically through CDP on npm and `npx` runs.
+- Show native Chrome group names and IDs in tab and group listings.
+
+### Changed
+
+- Tell agents to prefer human-readable tab-group names under 20 characters.
+
+### Fixed
+
+- Remove empty MCP groups after their last tab closes. Unused new groups expire after 60
+  seconds.
+- Use a fixed extension ID across npm installation and `npx` cache paths.
+
 ## [1.1.0] - 2026-09-26
 
 ### Fixed
