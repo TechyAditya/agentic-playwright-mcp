@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agentic-playwright-mcp": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/agentic-playwright-mcp/dist/cli.js",
+        "--keep-alive",
+        "--agent-id",
+        "cursor"
+      ]
+    }
+  }
+}

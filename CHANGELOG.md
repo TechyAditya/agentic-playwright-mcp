@@ -1,0 +1,74 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.0] - 2026-09-26
+
+Registers 15 more tools, for 29 in total, and keeps the tab isolation Playwright MCP does not have.
+
+### Added
+
+- 15 tools: `browser_close`, `browser_console_messages`, `browser_drag`, `browser_drop`, `browser_file_upload`, `browser_find`, `browser_handle_dialog`, `browser_navigate_back`, `browser_network_request`, `browser_network_requests`, `browser_network_response_body`, `browser_page_errors`, `browser_resize`, `browser_run_code_unsafe`, and `browser_select_option`.
+- CSS `element` selectors on click, hover, drag, drop, screenshot, and file upload, for role-less targets that never get a snapshot `ref`.
+- Vitest e2e suite (`npm run test:e2e`) that drives the built server against a local fixture and fails if a registered tool has no spec.
+
+### Fixed
+
+- Screenshots on Windows. The save path was split on `/`, so `mkdir` got an empty string.
+- `browser_network_response_body` only waited for future traffic. Historical lookups now read the tab's recorded requests first.
+- `browser_navigate_back` used in-page `history.back()`, which died when the execution context was destroyed. It now calls Playwright `goBack` and `goForward`, and treats a URL change as success when Chromium restores from bfcache.
+- An unanswered dialog blocked the whole shared Chrome. The server now dismisses it after about three seconds.
+- `playwright-checkpoint` resolved `@playwright/test` from `process.cwd()`, which broke when an MCP client started the server from the home directory.
+
+## [0.2.1] - 2026-04-03
+
+
+### Bug Fixes
+
+* use tag_name for checkout to fix npm publish
+* use tag_name output for checkout instead of github.ref
+
+## [0.2.0] - 2026-04-03
+
+
+### Features
+
+* comprehensive stealth script injection
+* expose snapshot filtering options and screenshot quality for small-model friendliness
+* stealth mode - remove automation fingerprints from Chrome
+
+
+### Bug Fixes
+
+* guard publish job with tag check instead of releases_created condition
+* guard publish job with tag existence check
+* persist ref store to disk for cross-process ref resolution
+
+
+### Miscellaneous
+
+* add release-please automation and commitlint
+* integrate npm publish into release-please workflow
+* integrate npm publish into release-please workflow
+
+## [0.1.1] - 2026-02-09
+
+### Fixed
+
+- Relaxed ESLint max-warnings for CI compatibility
+- Added .npmrc to .gitignore
+
+## [0.1.0] - 2026-02-09
+
+### Added
+
+- Initial release
+- Tab group isolation for multi-agent browser sharing
+- 10 MCP tools: tab_group, tabs, navigate, snapshot, click, type, hover, press_key, fill_form, wait_for
+- CDP connection to existing Chrome instances
+- Accessibility tree snapshots with element refs
+- Chrome tab group extension for visual organization
+- Persistent tab group registry (~/.agentic-playwright-mcp/tab-groups.json)
