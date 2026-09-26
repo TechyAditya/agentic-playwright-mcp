@@ -110,18 +110,44 @@ describe("tab groups and tabs", () => {
   it("removes a group after its last tab closes", async () => {
     const emptyGroup = `${session.group}-auto-cleanup`;
     await session.client.callOk("browser_tab_group", { action: "create", name: emptyGroup });
-    const created = await session.client.callOk("browser_tabs", {
+    const firstCreated = await session.client.callOk("browser_tabs", {
       action: "new",
       groupId: emptyGroup,
       url: `${session.baseUrl}/second.html`,
     });
-    const targetId = /[A-F0-9]{32}/.exec(created)?.[0];
-    expect(targetId).toBeTruthy();
+    const secondCreated = await session.client.callOk("browser_tabs", {
+      action: "new",
+      groupId: emptyGroup,
+      url: `${session.baseUrl}/second.html?tab=2`,
+    });
+    const firstTargetId = /[A-F0-9]{32}/.exec(firstCreated)?.[0];
+    const secondTargetId = /[A-F0-9]{32}/.exec(secondCreated)?.[0];
+    expect(firstTargetId).toBeTruthy();
+    expect(secondTargetId).toBeTruthy();
 
-    await session.client.callOk("browser_close", { targetId });
-    const groups = await session.client.callOk("browser_tab_group", { action: "list" });
+    await session.client.callOk("browser_tabs", {
+      action: "close",
+      groupId: emptyGroup,
+      targetId: firstTargetId,
+    });
+    const afterFirstClose = await session.client.callOk("browser_tab_group", {
+      action: "list",
+    });
+    expect(afterFirstClose).toContain(emptyGroup);
 
-    expect(groups).not.toContain(emptyGroup);
+    const remaining = await session.client.callOk("browser_tabs", {
+      action: "list",
+      groupId: emptyGroup,
+    });
+    expect(remaining).not.toContain(firstTargetId);
+    expect(remaining).toContain(secondTargetId);
+
+    await session.client.callOk("browser_close", { targetId: secondTargetId });
+    const afterSecondClose = await session.client.callOk("browser_tab_group", {
+      action: "list",
+    });
+
+    expect(afterSecondClose).not.toContain(emptyGroup);
   });
 
   it("lists groups", async () => {

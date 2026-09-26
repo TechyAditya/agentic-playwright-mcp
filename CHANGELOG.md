@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-09-27
+
+### Fixed
+
+- Attach Playwright listeners before navigating tabs created through the companion
+  extension, so page-load console and network events are retained.
+- Wait for an extension-created target to appear in Playwright before using or closing it.
+- Refuse ambiguous URL-based target matches instead of selecting another agent's tab.
+
+### Tests
+
+- Verify that a group remains after its first tab closes and disappears after its last tab
+  closes.
+
 ## [1.2.0] - 2026-09-26
 
 ### Added

@@ -641,18 +641,45 @@ async function pageTargetId(page: Page): Promise<string | null> {
   }
 }
 
+/**
+ * Which page a URL identifies, when it identifies one at all.
+ *
+ * Returns an index only when the URL belongs to exactly one target and one
+ * page. Tabs created blank all share `about:blank`, so ordering is not a
+ * reliable tiebreak: picking by enumeration order hands the caller another
+ * agent's tab, and every later call for that id follows it there.
+ */
+export function resolveTargetByUrl(
+  targets: Array<{ id: string; url: string }>,
+  pageUrls: string[],
+  targetId: string,
+): number | null {
+  const target = targets.find((row) => row.id === targetId);
+  if (!target) {
+    return null;
+  }
+  const sameUrlTargets = targets.filter((row) => row.url === target.url);
+  const matchingPages = pageUrls
+    .map((url, index) => ({ url, index }))
+    .filter((row) => row.url === target.url);
+  if (sameUrlTargets.length !== 1 || matchingPages.length !== 1) {
+    return null;
+  }
+  return matchingPages[0]!.index;
+}
+
 async function findPageByTargetId(
   browser: Browser,
   targetId: string,
   cdpUrl?: string,
-): Promise<Page | null> {
+): Promise<{ page: Page; verified: boolean } | null> {
   const pages = await getAllPages(browser);
-  // First, try the standard CDP session approach
-  for (const page of pages) {
-    const tid = await pageTargetId(page).catch(() => null);
-    if (tid && tid === targetId) {
-      return page;
-    }
+  // Ask every page at once. One CDP round trip per tab, in series, is slow
+  // enough on a busy browser to push a dialog past its auto-dismiss window.
+  const ids = await Promise.all(pages.map((page) => pageTargetId(page).catch(() => null)));
+  const match = ids.findIndex((id) => id !== null && id === targetId);
+  if (match >= 0) {
+    return { page: pages[match]!, verified: true };
   }
   // If CDP sessions fail (e.g., extension relay blocks Target.attachToBrowserTarget),
   // fall back to URL-based matching using the /json/list endpoint
@@ -670,24 +697,13 @@ async function findPageByTargetId(
           url: string;
           title?: string;
         }>;
-        const target = targets.find((t) => t.id === targetId);
-        if (target) {
-          // Try to find a page with matching URL
-          const urlMatch = pages.filter((p) => p.url() === target.url);
-          if (urlMatch.length === 1) {
-            return urlMatch[0];
-          }
-          // If multiple URL matches, use index-based matching as fallback
-          // This works when Playwright and the relay enumerate tabs in the same order
-          if (urlMatch.length > 1) {
-            const sameUrlTargets = targets.filter((t) => t.url === target.url);
-            if (sameUrlTargets.length === urlMatch.length) {
-              const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
-              if (idx >= 0 && idx < urlMatch.length) {
-                return urlMatch[idx];
-              }
-            }
-          }
+        const index = resolveTargetByUrl(
+          targets,
+          pages.map((page) => page.url()),
+          targetId,
+        );
+        if (index !== null) {
+          return { page: pages[index]!, verified: false };
         }
       }
     } catch {
@@ -729,8 +745,12 @@ export async function getPageForTargetId(opts: {
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (found) {
-    rememberPageForTargetId(opts.targetId, found);
-    return found;
+    // Only a CDP-confirmed page is worth remembering. Caching a URL guess
+    // makes one wrong answer permanent for every later call on this id.
+    if (found.verified) {
+      rememberPageForTargetId(opts.targetId, found.page);
+    }
+    return found.page;
   }
   // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
   // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
@@ -874,11 +894,11 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   targetId: string;
 }): Promise<void> {
   const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
-  if (!page) {
+  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  if (!found) {
     throw new Error("tab not found");
   }
-  await page.close();
+  await found.page.close();
 }
 
 /**
@@ -890,10 +910,11 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   targetId: string;
 }): Promise<void> {
   const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
-  if (!page) {
+  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  if (!found) {
     throw new Error("tab not found");
   }
+  const page = found.page;
   try {
     await page.bringToFront();
   } catch (err) {

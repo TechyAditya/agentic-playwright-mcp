@@ -11,6 +11,7 @@ import {
   closePageByTargetIdViaPlaywright,
   focusPageByTargetIdViaPlaywright,
   getPageForTargetId,
+  ensurePageState,
 } from "../../browser/pw-session.js";
 import {
   addTabToGroup,
@@ -30,6 +31,19 @@ import {
   listVisualTabGroups,
   listVisualTabs,
 } from "../../browser/chrome-tab-groups.js";
+
+async function waitForPageTarget(cdpUrl: string, targetId: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    try {
+      return await getPageForTargetId({ cdpUrl, targetId });
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("tab not found");
+}
 
 export function registerBrowserTabsTool(
   register: RegisterToolFn,
@@ -200,13 +214,17 @@ export function registerBrowserTabsTool(
           const tabUrl = url || "about:blank";
           let resultTargetId: string;
           let chromeTabId: number | undefined;
+          let createdViaExtension = false;
 
           const hasExtension = await isTabGrouperAvailable(cdp);
           if (hasExtension) {
             try {
-              const extTab = await createTabViaExtension(cdp, tabUrl);
+              // Create a blank tab first so Playwright can attach its console,
+              // error, and network listeners before the requested page loads.
+              const extTab = await createTabViaExtension(cdp, "about:blank");
               resultTargetId = extTab.targetId;
               chromeTabId = extTab.chromeTabId;
+              createdViaExtension = true;
             } catch {
               const pwTab = await createPageViaPlaywright({ cdpUrl: cdp, url: tabUrl });
               resultTargetId = pwTab.targetId;
@@ -218,7 +236,15 @@ export function registerBrowserTabsTool(
 
           // Pin this Playwright Page to the targetId so later tools (goBack,
           // evaluate, …) do not pick a different tab with the same URL.
-          await getPageForTargetId({ cdpUrl: cdp, targetId: resultTargetId }).catch(() => {});
+          const page = createdViaExtension
+            ? await waitForPageTarget(cdp, resultTargetId)
+            : await getPageForTargetId({ cdpUrl: cdp, targetId: resultTargetId });
+          ensurePageState(page);
+          if (createdViaExtension && tabUrl !== "about:blank") {
+            await page.goto(tabUrl, { timeout: 30_000 }).catch(() => {
+              // Keep the created tab when navigation fails, matching the Playwright path.
+            });
+          }
 
           if (groupId) {
             addTabToGroup(cdp, resultTargetId, groupId, chromeTabId);

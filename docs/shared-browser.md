@@ -23,6 +23,10 @@ window. It assumes the server already runs. To install it, read the
 If you skip step 3, the server uses the first tab it finds. Two agents then drive one page.
 Nothing warns you. Every call succeeds against the wrong page.
 
+`targetId` defines tab identity. A URL does not. When CDP cannot verify a target and more
+than one tab has the same URL, the server returns an error instead of guessing which tab
+you meant.
+
 A group hides your tabs from other agents. `browser_tabs` with `action: "list"` and your
 `groupId` returns only your tabs, and the server rejects a `targetId` from another group.
 The server removes the group after its last tab closes. A new empty group remains available

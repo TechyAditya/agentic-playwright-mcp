@@ -46,7 +46,8 @@ async function loadHandlers(options: {
     focusPageByTargetIdViaPlaywright: vi.fn(async () => {}),
     // browser_tabs pins the new tab's Page to its targetId so later tools cannot
     // pick a different tab that happens to share the URL.
-    getPageForTargetId: vi.fn(async () => ({}) as never),
+    getPageForTargetId: vi.fn(async () => ({ goto: vi.fn() }) as never),
+    ensurePageState: vi.fn(),
   }));
 
   vi.doMock("../src/browser/chrome-tab-groups.js", () => ({
