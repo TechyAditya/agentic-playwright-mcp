@@ -1,0 +1,88 @@
+{
+  "name": "agentic-playwright-mcp",
+  "version": "1.0.0",
+  "description": "Fork of official Playwright MCP with multi-agent tab isolation via targetId",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agentic-playwright-mcp": "dist/cli.js",
+    "agentic-playwright-mcp-daemon": "dist/daemon/cli.js",
+    "apmcp": "dist/cli.js",
+    "apmcp-daemon": "dist/daemon/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "pretest:e2e": "npm run build",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:watch": "vitest --config vitest.e2e.config.ts",
+    "test:all": "npm run test && npm run test:e2e",
+    "smoke": "node scripts/smoke-mcp.mjs",
+    "smoke:tools": "node scripts/list-tools.mjs",
+    "docs:tools": "npm run build && node scripts/gen-tools-doc.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "playwright",
+    "browser",
+    "automation",
+    "multi-agent",
+    "tab-isolation",
+    "cdp"
+  ],
+  "author": "Playwright MCP contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TechyAditya/agentic-playwright-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TechyAditya/agentic-playwright-mcp/issues"
+  },
+  "homepage": "https://github.com/TechyAditya/agentic-playwright-mcp#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "adm-zip": "^0.6.1",
+    "commander": "^12.1.0",
+    "glob": "^13.0.1",
+    "playwright-checkpoint": "^0.3.0",
+    "playwright-core": "^1.59.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^22.19.10",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.18.2",
+    "@typescript-eslint/parser": "^8.18.2",
+    "eslint": "^9.17.0",
+    "globals": "^17.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
