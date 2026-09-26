@@ -1,0 +1,498 @@
+#!/usr/bin/env node
+
+/**
+ * Chrome Daemon - Singleton process that manages Chrome browser
+ * Ensures only one Chrome instance runs and optionally keeps it alive
+ */
+
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+import { globSync } from "glob";
+import { resolveExtensions } from "../utils/extension-installer.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DAEMON_LOCK_FILE = path.join(os.tmpdir(), "agentic-playwright-mcp-daemon.lock");
+const DAEMON_LOG_FILE = path.join(os.tmpdir(), "agentic-playwright-mcp-daemon.log");
+const CDP_PORT = 9223; // Use dedicated port to avoid conflicts with existing Chrome
+const DEFAULT_CHROME_PROFILE = path.join(os.homedir(), ".agentic-playwright-mcp", "chrome-profile");
+
+interface ChromeDaemonConfig {
+  chromeUserDataDir?: string;
+  chromeExtensions?: string[];
+  chromeExecutable?: string;
+  downloadDir?: string;
+  keepAlive?: boolean;
+}
+
+class ChromeDaemon {
+  private chromeProcess: ChildProcess | null = null;
+  private shuttingDown = false;
+  private monitorInterval: NodeJS.Timeout | null = null;
+  private config: ChromeDaemonConfig;
+
+  constructor(config?: ChromeDaemonConfig) {
+    this.config = config || {};
+  }
+
+  private shouldKeepAlive(): boolean {
+    return this.config.keepAlive === true;
+  }
+
+  async start() {
+    // Check if daemon is already running
+    if (this.isDaemonRunning()) {
+      this.log("Daemon already running, exiting");
+      process.exit(0);
+    }
+
+    // Create lock file
+    this.createLockFile();
+
+    // Handle cleanup on exit
+    process.on("SIGINT", () => this.shutdown());
+    process.on("SIGTERM", () => this.shutdown());
+    process.on("SIGHUP", () => this.shutdown());
+    process.on("SIGQUIT", () => this.shutdown());
+    process.on("exit", () => this.cleanup());
+
+    // Handle unexpected errors to ensure cleanup
+    process.on("uncaughtException", (err) => {
+      this.log(`Uncaught exception: ${err.message}`);
+      this.shutdown();
+    });
+    process.on("unhandledRejection", (reason) => {
+      this.log(`Unhandled rejection: ${reason}`);
+      this.shutdown();
+    });
+
+    this.log("Chrome daemon started");
+
+    // Start Chrome and keep it alive
+    await this.ensureChromeRunning();
+
+    // Monitor Chrome process only when keep-alive mode is enabled.
+    if (this.shouldKeepAlive()) {
+      this.monitorInterval = setInterval(() => this.ensureChromeRunning(), 5000);
+    } else {
+      this.log("Keep-alive disabled; daemon will not restart Chrome after exit");
+    }
+  }
+
+  private isDaemonRunning(): boolean {
+    if (!fs.existsSync(DAEMON_LOCK_FILE)) {
+      return false;
+    }
+
+    try {
+      const pid = parseInt(fs.readFileSync(DAEMON_LOCK_FILE, "utf-8").trim());
+      // Check if process is still running
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      // Process not running, remove stale lock file
+      fs.unlinkSync(DAEMON_LOCK_FILE);
+      return false;
+    }
+  }
+
+  private createLockFile() {
+    fs.writeFileSync(DAEMON_LOCK_FILE, String(process.pid));
+  }
+
+  private async ensureChromeRunning() {
+    if (this.shuttingDown) {
+      return; // Don't start Chrome during shutdown
+    }
+
+    if (this.chromeProcess && !this.chromeProcess.killed) {
+      return; // Chrome is running
+    }
+
+    // On Windows, Chrome's parent process may exit after spawning children.
+    // Check if Chrome is actually reachable before restarting.
+    if (await this.isChromeReachable()) {
+      return;
+    }
+
+    this.log("Starting Chrome...");
+    await this.startChrome();
+  }
+
+  private async isChromeReachable(): Promise<boolean> {
+    try {
+      const response = await fetch(`http://localhost:${CDP_PORT}/json/version`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Strip automation markers from the browser user agent via CDP.
+   * Runs once after Chrome starts to make it look like a normal browser.
+   */
+  private async applyStealthUserAgent() {
+    try {
+      const res = await fetch(`http://localhost:${CDP_PORT}/json/version`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      const info = await res.json() as { webSocketDebuggerUrl?: string; "User-Agent"?: string };
+      const wsUrl = info.webSocketDebuggerUrl;
+      const ua = info["User-Agent"];
+      if (!wsUrl || !ua) return;
+
+      // Clean user agent: remove "Headless", "Chrome for Testing", automation markers
+      const cleanUa = ua
+        .replace(/HeadlessChrome/g, "Chrome")
+        .replace(/ Chrome for Testing/g, " Chrome")
+        .replace(/ Headless/g, "");
+
+      if (cleanUa === ua) {
+        this.log("User agent already clean");
+        return;
+      }
+
+      // Connect via WebSocket and send CDP command
+      const { WebSocket } = await import("ws");
+      const ws = new WebSocket(wsUrl);
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", () => {
+          ws.send(JSON.stringify({
+            id: 1,
+            method: "Network.setUserAgentOverride",
+            params: { userAgent: cleanUa },
+          }));
+          // Give it a moment then close
+          setTimeout(() => { ws.close(); resolve(); }, 200);
+        });
+        ws.on("error", reject);
+        setTimeout(reject, 3000);
+      });
+      this.log(`Stealth UA applied: ${cleanUa.substring(0, 80)}...`);
+    } catch (err) {
+      this.log(`WARNING: Failed to apply stealth UA: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Enable file downloads via CDP Browser.setDownloadBehavior.
+   * Chrome's --download-default-directory flag alone isn't sufficient
+   * for CDP-controlled browsers — the download behavior must be
+   * explicitly set via the protocol.
+   */
+  private async enableDownloads() {
+    const downloadPath = this.config.downloadDir || path.join(os.homedir(), ".agentic-playwright-mcp", "downloads");
+
+    // Ensure the download directory exists
+    if (!fs.existsSync(downloadPath)) {
+      fs.mkdirSync(downloadPath, { recursive: true });
+      this.log(`Created download directory: ${downloadPath}`);
+    }
+
+    try {
+      const res = await fetch(`http://localhost:${CDP_PORT}/json/version`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      const info = await res.json() as { webSocketDebuggerUrl?: string };
+      const wsUrl = info.webSocketDebuggerUrl;
+      if (!wsUrl) {
+        this.log("WARNING: No webSocketDebuggerUrl — cannot enable downloads");
+        return;
+      }
+
+      const { WebSocket } = await import("ws");
+      const ws = new WebSocket(wsUrl);
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", () => {
+          ws.send(JSON.stringify({
+            id: 1,
+            method: "Browser.setDownloadBehavior",
+            params: {
+              behavior: "allow",
+              downloadPath,
+              eventsEnabled: true,
+            },
+          }));
+          setTimeout(() => { ws.close(); resolve(); }, 200);
+        });
+        ws.on("error", reject);
+        setTimeout(reject, 3000);
+      });
+      this.log(`Downloads enabled → ${downloadPath}`);
+    } catch (err) {
+      this.log(`WARNING: Failed to enable downloads: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async startChrome() {
+    const chromePath = this.config.chromeExecutable || this.findChromePath();
+    if (!chromePath) {
+      this.log("ERROR: Chrome not found");
+      return;
+    }
+
+    // Use configured profile or default persistent profile
+    const userDataDir = this.config.chromeUserDataDir || DEFAULT_CHROME_PROFILE;
+
+    // Ensure user data directory exists
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
+      this.log(`Created Chrome profile directory: ${userDataDir}`);
+    }
+
+    const args = [
+      `--remote-debugging-port=${CDP_PORT}`,
+      `--user-data-dir=${userDataDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--no-startup-window",
+      "--disable-background-networking",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      `--download-default-directory=${this.config.downloadDir || path.join(os.homedir(), ".agentic-playwright-mcp", "downloads")}`,
+      // Stealth: make browser look like a normal user session
+      "--disable-blink-features=AutomationControlled",  // removes navigator.webdriver=true
+      "--disable-features=AutomationControllerForTesting",
+      "--disable-infobars",                              // removes "Chrome is being controlled" bar
+      "--disable-automation",                            // disables automation extension
+    ];
+
+    // Always include bundled tab-grouper extension + any user-configured extensions
+    {
+      const allExtensions = [...(this.config.chromeExtensions || [])];
+
+      // Auto-include bundled tab-grouper extension
+      const bundledTabGrouper = path.join(__dirname, "..", "..", "extensions", "tab-grouper");
+      if (fs.existsSync(bundledTabGrouper) && !allExtensions.some(e => e.includes("tab-grouper"))) {
+        allExtensions.push(bundledTabGrouper);
+        this.log(`Auto-including bundled tab-grouper extension`);
+      }
+
+      if (allExtensions.length > 0) {
+        // Ensure developer mode is enabled for extensions
+        this.enableDeveloperMode(userDataDir);
+
+        try {
+          const extensionPaths = await resolveExtensions(allExtensions);
+          if (extensionPaths.length > 0) {
+            const pathsStr = extensionPaths.join(",");
+            args.push(`--load-extension=${pathsStr}`);
+            this.log(`Loading extensions: ${pathsStr}`);
+
+            // Warn if using branded Chrome 137+
+            if (chromePath.includes("Google Chrome.app") && !chromePath.includes("Chrome for Testing")) {
+              this.log("WARNING: Using branded Chrome may not support --load-extension in version 137+");
+              this.log("         Recommend installing Chrome for Testing for guaranteed extension support");
+            }
+          }
+        } catch (error) {
+          this.log(`WARNING: Failed to resolve extensions: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
+
+    this.chromeProcess = spawn(chromePath, args, {
+      detached: true,
+      stdio: "ignore",
+    });
+
+    this.chromeProcess.on("exit", (code) => {
+      this.log(`Chrome exited with code ${code}`);
+      this.chromeProcess = null;
+      if (!this.shuttingDown) {
+        if (this.shouldKeepAlive()) {
+          this.log("Chrome exited unexpectedly, will restart...");
+        } else {
+          this.log("Chrome exited; keep-alive disabled, shutting down daemon");
+          this.shutdown();
+        }
+      }
+    });
+
+    this.chromeProcess.unref();
+    this.log(`Chrome started (PID: ${this.chromeProcess.pid})`);
+
+    // Wait for Chrome to be ready
+    for (let i = 0; i < 30; i++) {
+      if (this.shuttingDown) {
+        this.log("Shutdown requested, aborting Chrome startup wait");
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (await this.isChromeReachable()) {
+        this.log("Chrome is ready");
+        await this.applyStealthUserAgent();
+        await this.enableDownloads();
+        return;
+      }
+    }
+
+    this.log("WARNING: Chrome started but not responding on CDP port");
+  }
+
+  private enableDeveloperMode(userDataDir: string) {
+    const prefsPath = path.join(userDataDir, "Default", "Preferences");
+    const defaultDir = path.join(userDataDir, "Default");
+
+    try {
+      // Ensure Default directory exists
+      if (!fs.existsSync(defaultDir)) {
+        fs.mkdirSync(defaultDir, { recursive: true });
+      }
+
+      // Read existing preferences or create new
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Chrome prefs JSON has deeply nested dynamic structure
+      let prefs: Record<string, any> = {};
+      if (fs.existsSync(prefsPath)) {
+        const prefsContent = fs.readFileSync(prefsPath, "utf-8");
+        prefs = JSON.parse(prefsContent);
+      }
+
+      // Set developer mode for extensions
+      if (!prefs.extensions) {
+        prefs.extensions = {};
+      }
+      if (!prefs.extensions.ui) {
+        prefs.extensions.ui = {};
+      }
+      prefs.extensions.ui.developer_mode = true;
+
+      // Write preferences
+      fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+      this.log("Enabled developer mode for extensions");
+    } catch (error) {
+      this.log(`Warning: Could not enable developer mode: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private findChromePath(): string | null {
+    const platform = process.platform;
+    const paths: string[] = [];
+
+    if (platform === "darwin") {
+      // Chrome for Testing locations (prioritized for --load-extension support)
+      paths.push(
+        path.join(os.homedir(), ".cache/puppeteer/chrome/mac_arm-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+        path.join(os.homedir(), ".cache/puppeteer/chrome/mac-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+        path.join(os.homedir(), "Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+        "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        // Chromium and standard Chrome (fallback, may not support --load-extension)
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Comet.app/Contents/MacOS/Comet"
+      );
+    } else if (platform === "linux") {
+      paths.push(
+        path.join(os.homedir(), ".cache/puppeteer/chrome/linux-*/chrome-linux*/chrome"),
+        path.join(os.homedir(), ".cache/ms-playwright/chromium-*/chrome-linux/chrome"),
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome"
+      );
+    } else if (platform === "win32") {
+      paths.push(
+        path.join(os.homedir(), ".cache\\puppeteer\\chrome\\win64-*\\chrome-win64\\chrome.exe"),
+        path.join(os.homedir(), ".cache\\ms-playwright\\chromium-*\\chrome-win\\chrome.exe"),
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+      );
+    }
+
+    // Resolve glob patterns and find first existing path
+    for (const pathPattern of paths) {
+      if (pathPattern.includes("*")) {
+        // Use glob to resolve wildcards
+        const matches = globSync(pathPattern);
+        if (matches.length > 0) {
+          // Sort to get latest version
+          matches.sort().reverse();
+          if (fs.existsSync(matches[0])) {
+            this.log(`Found Chrome at: ${matches[0]}`);
+            return matches[0];
+          }
+        }
+      } else if (fs.existsSync(pathPattern)) {
+        this.log(`Found Chrome at: ${pathPattern}`);
+        return pathPattern;
+      }
+    }
+
+    return null;
+  }
+
+  private shutdown() {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+
+    this.log("Shutting down daemon...");
+
+    // Clear the monitoring interval to allow graceful exit
+    if (this.monitorInterval) {
+      clearInterval(this.monitorInterval);
+      this.monitorInterval = null;
+    }
+
+    if (this.chromeProcess && !this.chromeProcess.killed) {
+      this.log("Stopping Chrome...");
+      this.chromeProcess.kill();
+    }
+
+    this.cleanup();
+    process.exit(0);
+  }
+
+  private cleanup() {
+    if (fs.existsSync(DAEMON_LOCK_FILE)) {
+      fs.unlinkSync(DAEMON_LOCK_FILE);
+    }
+  }
+
+  private log(message: string) {
+    const timestamp = new Date().toISOString();
+    const logLine = `[${timestamp}] ${message}\n`;
+
+    // Log to console
+    console.error(logLine.trim());
+
+    // Log to file
+    fs.appendFileSync(DAEMON_LOG_FILE, logLine);
+  }
+}
+
+// Parse CLI args with commander (only runs if this file is executed directly)
+const __selfUrl = import.meta.url;
+const __argvUrl = new URL(`file://${process.argv[1].replace(/\\/g, "/")}`).href;
+if (__selfUrl === __argvUrl) {
+  const { program } = await import("commander");
+
+  program
+    .name("chrome-daemon")
+    .description("Chrome daemon process for agentic-playwright-mcp")
+    .version("0.1.0")
+    .option("--config <json>", "Configuration JSON string")
+    .parse();
+
+  const options = program.opts();
+  let daemonConfig: ChromeDaemonConfig | undefined;
+
+  if (options.config) {
+    try {
+      daemonConfig = JSON.parse(options.config);
+    } catch (e) {
+      console.error('Failed to parse daemon config:', e);
+    }
+  }
+
+  // Start daemon
+  const daemon = new ChromeDaemon(daemonConfig);
+  daemon.start();
+}

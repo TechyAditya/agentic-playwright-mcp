@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "AgenticPW Tab Grouper",
+  "description": "Companion extension for agentic-playwright-mcp. Provides chrome.tabGroups API access via CDP.",
+  "version": "1.0.0",
+  "permissions": ["tabs", "tabGroups", "alarms", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "externally_connectable": {
+    "ids": ["*"]
+  }
+}

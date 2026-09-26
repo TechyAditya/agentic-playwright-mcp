@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>APMCP Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    #dropzone, #dragtarget { border: 2px dashed #888; padding: 24px; margin: 12px 0; }
+    #dragsource { background: #eef; padding: 12px; width: 120px; }
+    .tall { height: 1200px; background: linear-gradient(#fff, #ddd); }
+  </style>
+</head>
+<body>
+  <h1>Fixture Page</h1>
+  <p id="intro">Needle text for find: alpaca-sentinel</p>
+
+  <a id="link-second" href="/second.html">Go to second page</a>
+
+  <button id="btn-click">Click me</button>
+  <output id="click-result">click:none</output>
+
+  <div id="hover-target">Hover me</div>
+  <output id="hover-result">hover:none</output>
+
+  <label for="text-input">Text input</label>
+  <input id="text-input" type="text" />
+  <output id="key-result">key:none</output>
+
+  <form id="the-form">
+    <label for="form-name">Name</label>
+    <input id="form-name" name="name" type="text" />
+    <label for="form-email">Email</label>
+    <input id="form-email" name="email" type="email" />
+    <label for="form-agree">Agree</label>
+    <input id="form-agree" name="agree" type="checkbox" />
+  </form>
+
+  <label for="the-select">Pick a fruit</label>
+  <select id="the-select">
+    <option value="apple">Apple</option>
+    <option value="banana">Banana</option>
+    <option value="cherry">Cherry</option>
+  </select>
+  <output id="select-result">select:apple</output>
+
+  <label for="file-input">Upload</label>
+  <input id="file-input" type="file" />
+  <output id="file-result">file:none</output>
+
+  <div id="dropzone">Drop here</div>
+  <output id="drop-result">drop:none</output>
+
+  <div id="dragsource" draggable="true">Drag me</div>
+  <div id="dragtarget">Drag target</div>
+  <output id="drag-result">drag:none</output>
+
+  <button id="btn-dialog">Open confirm</button>
+  <output id="dialog-result">dialog:none</output>
+
+  <button id="btn-alert">Open unarmed alert</button>
+
+  <button id="btn-error">Throw error</button>
+
+  <button id="btn-delayed">Show delayed text</button>
+  <div id="delayed"></div>
+
+  <div class="tall">tall filler for fullPage screenshots</div>
+
+  <script>
+    console.log('fixture-console-log');
+    console.warn('fixture-console-warn');
+    console.error('fixture-console-error');
+
+    fetch('/data.json').then(r => r.json()).then(d => {
+      document.title = 'APMCP Fixture (' + d.items.length + ')';
+    });
+
+    document.getElementById('btn-click').addEventListener('click', () => {
+      document.getElementById('click-result').textContent = 'click:done';
+    });
+
+    document.getElementById('hover-target').addEventListener('mouseenter', () => {
+      document.getElementById('hover-result').textContent = 'hover:done';
+    });
+
+    document.getElementById('text-input').addEventListener('keydown', (e) => {
+      document.getElementById('key-result').textContent = 'key:' + e.key;
+    });
+
+    document.getElementById('the-select').addEventListener('change', (e) => {
+      document.getElementById('select-result').textContent = 'select:' + e.target.value;
+    });
+
+    document.getElementById('file-input').addEventListener('change', (e) => {
+      const names = [...(e.target.files || [])].map(f => f.name).join(',');
+      document.getElementById('file-result').textContent = 'file:' + (names || 'none');
+    });
+
+    const dropzone = document.getElementById('dropzone');
+    dropzone.addEventListener('dragover', (e) => e.preventDefault());
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const dt = e.dataTransfer;
+      const text = dt ? dt.getData('text/plain') : '';
+      const files = dt && dt.files ? [...dt.files].map(f => f.name).join(',') : '';
+      document.getElementById('drop-result').textContent = 'drop:' + (text || files || 'empty');
+    });
+
+    const dragsource = document.getElementById('dragsource');
+    dragsource.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', 'dragged-payload');
+    });
+    const dragtarget = document.getElementById('dragtarget');
+    dragtarget.addEventListener('dragover', (e) => e.preventDefault());
+    dragtarget.addEventListener('drop', (e) => {
+      e.preventDefault();
+      document.getElementById('drag-result').textContent =
+        'drag:' + e.dataTransfer.getData('text/plain');
+    });
+
+    document.getElementById('btn-dialog').addEventListener('click', () => {
+      const ok = confirm('proceed?');
+      document.getElementById('dialog-result').textContent = 'dialog:' + ok;
+    });
+
+    document.getElementById('btn-alert').addEventListener('click', () => {
+      alert('unarmed alert');
+      document.getElementById('dialog-result').textContent = 'dialog:past-alert';
+    });
+
+    document.getElementById('btn-error').addEventListener('click', () => {
+      throw new Error('fixture-page-error');
+    });
+
+    document.getElementById('btn-delayed').addEventListener('click', () => {
+      setTimeout(() => {
+        document.getElementById('delayed').textContent = 'delayed-text-appeared';
+      }, 700);
+    });
+  </script>
+</body>
+</html>
