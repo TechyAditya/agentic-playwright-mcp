@@ -25,6 +25,7 @@ import { formatErrorMessage } from "../utils/errors.js";
 import { getHeadersWithAuth } from "./cdp.helpers.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import { STEALTH_SCRIPT } from "./stealth.js";
+import { inheritGroupFromOpener } from "./tab-groups.js";
 
 // ---------- Persistent ref store (file-based) ----------
 const REFS_STORE_DIR = path.join(os.tmpdir(), "agentic-playwright-mcp-refs");
@@ -536,7 +537,27 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => {
     ensurePageState(page);
     enablePageDownloads(page).catch(() => {});
+    inheritTabGroup(page).catch(() => {});
   });
+}
+
+/**
+ * A tab a page opens for itself belongs to no group, because only
+ * browser_tabs({ action: 'new' }) records membership. A group-scoped listing
+ * then loses that tab, and two agents sharing this browser can each mistake
+ * it for their own. Give a popup the group its opener is in.
+ */
+async function inheritTabGroup(page: Page): Promise<void> {
+  const opener = await page.opener();
+  if (!opener) {
+    return;
+  }
+  const openerTargetId = await pageTargetId(opener);
+  const targetId = openerTargetId ? await pageTargetId(page) : null;
+  if (!openerTargetId || !targetId) {
+    return;
+  }
+  inheritGroupFromOpener(cached?.cdpUrl ?? "", openerTargetId, targetId);
 }
 
 export function ensureContextState(context: BrowserContext): ContextState {

@@ -10,6 +10,7 @@ import {
   getGroupForTab,
   getTabGroup,
   getTabsInGroup,
+  inheritGroupFromOpener,
   isValidColor,
   listTabGroups,
   pruneStaleTargets,
@@ -109,6 +110,41 @@ describe("tab group registry", () => {
       removed: true,
       ungroupedTargetIds: ["target-2"],
     });
+  });
+
+  it("gives a tab the group its opener is in", () => {
+    const cdp = "http://localhost:9223";
+    createTabGroup(cdp, { name: "amazon" });
+    addTabToGroup(cdp, "opener-1", "amazon");
+
+    // A tab a page opens for itself is never registered by action:new, so
+    // without this it stays ungrouped and a scoped list loses it.
+    expect(inheritGroupFromOpener(cdp, "opener-1", "popup-1")).toBe("amazon");
+    expect(getGroupForTab(cdp, "popup-1")).toBe("amazon");
+    expect(getTabsInGroup(cdp, "amazon").sort()).toEqual(["opener-1", "popup-1"]);
+  });
+
+  it("leaves a popup ungrouped when its opener is ungrouped", () => {
+    const cdp = "http://localhost:9223";
+    createTabGroup(cdp, { name: "flipkart" });
+
+    expect(inheritGroupFromOpener(cdp, "loose-tab", "popup-2")).toBeNull();
+    expect(getGroupForTab(cdp, "popup-2")).toBeNull();
+    expect(getTabsInGroup(cdp, "flipkart")).toEqual([]);
+  });
+
+  it("keeps one group's popup out of another group", () => {
+    const cdp = "http://localhost:9223";
+    createTabGroup(cdp, { name: "amazon" });
+    createTabGroup(cdp, { name: "flipkart" });
+    addTabToGroup(cdp, "amazon-tab", "amazon");
+    addTabToGroup(cdp, "flipkart-tab", "flipkart");
+
+    inheritGroupFromOpener(cdp, "amazon-tab", "amazon-popup");
+    inheritGroupFromOpener(cdp, "flipkart-tab", "flipkart-popup");
+
+    expect(getTabsInGroup(cdp, "amazon").sort()).toEqual(["amazon-popup", "amazon-tab"]);
+    expect(getTabsInGroup(cdp, "flipkart").sort()).toEqual(["flipkart-popup", "flipkart-tab"]);
   });
 
   it("stores chrome and extension metadata", () => {

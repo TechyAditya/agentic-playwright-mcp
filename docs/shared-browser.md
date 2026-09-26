@@ -26,6 +26,11 @@ Nothing warns you. Every call succeeds against the wrong page.
 A group hides your tabs from other agents. `browser_tabs` with `action: "list"` and your
 `groupId` returns only your tabs, and the server rejects a `targetId` from another group.
 
+A tab the page opens for itself joins the group its opener is in. A product link with
+`target="_blank"` therefore stays yours, and it appears in your group's listing without
+another call. Read the listing again after a click that can open a tab, and use the new
+`targetId` from then on: the tab you clicked in never changes.
+
 For a single agent on one tab, skip the group and keep the `targetId`.
 
 ## Hand a tab back and forth with a person

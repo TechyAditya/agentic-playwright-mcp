@@ -57,6 +57,38 @@ describe("tab groups and tabs", () => {
     });
   });
 
+  it("keeps a tab the page opened inside the opener's group", async () => {
+    const before = await session.client.callOk("browser_tabs", {
+      action: "list",
+      groupId: session.group,
+    });
+
+    // A popup is never registered by action:new, so without inheritance it
+    // stays ungrouped and another agent's listing can claim it.
+    await session.callOk("browser_evaluate", {
+      expression:
+        `() => { const a = document.createElement("a"); a.id = "popup-link"; ` +
+        `a.href = "${session.baseUrl}/second.html"; a.target = "_blank"; ` +
+        `a.textContent = "open"; document.body.appendChild(a); }`,
+    });
+    await session.callOk("browser_click", { element: "#popup-link" });
+
+    let popupId: string | undefined;
+    for (let attempt = 0; attempt < 10 && !popupId; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const listing = await session.client.callOk("browser_tabs", {
+        action: "list",
+        groupId: session.group,
+      });
+      popupId = [...listing.matchAll(/[A-F0-9]{32}/g)]
+        .map((match) => match[0])
+        .find((id) => !before.includes(id));
+    }
+
+    expect(popupId).toBeTruthy();
+    await session.client.callOk("browser_close", { targetId: popupId });
+  });
+
   it("closes a tab it opened", async () => {
     const created = await session.client.callOk("browser_tabs", {
       action: "new",

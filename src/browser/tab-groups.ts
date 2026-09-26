@@ -280,6 +280,27 @@ export function addTabToGroup(
   });
 }
 
+/**
+ * Give a tab the group its opener is in.
+ *
+ * Only browser_tabs({ action: 'new' }) records membership, so a tab a page
+ * opens for itself starts ungrouped. A group-scoped listing then loses it,
+ * and two agents sharing this browser can each mistake it for their own.
+ * Returns the group it joined, or null when the opener is ungrouped.
+ */
+export function inheritGroupFromOpener(
+  cdpUrl: string,
+  openerTargetId: string,
+  targetId: string,
+): string | null {
+  const groupName = getGroupForTab(cdpUrl, openerTargetId);
+  if (!groupName || targetId === openerTargetId) {
+    return null;
+  }
+  addTabToGroup(cdpUrl, targetId, groupName);
+  return groupName;
+}
+
 export function removeTabFromGroup(_cdpUrl: string, targetId: string): void {
   withRegistry((registry) => {
     delete registry.tabs[targetId];
