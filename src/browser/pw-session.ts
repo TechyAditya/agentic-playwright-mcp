@@ -859,7 +859,10 @@ export async function createPageViaPlaywright(opts: { cdpUrl: string; url: strin
   const context = browser.contexts()[0] ?? (await browser.newContext());
   ensureContextState(context);
 
-  const page = await context.newPage();
+  // Open in the background when we can. context.newPage() activates the tab
+  // and restores a minimized Chrome window on Windows.
+  const page =
+    (await createBackgroundPage(context, "about:blank")) ?? (await context.newPage());
   ensurePageState(page);
 
   // Navigate to the URL
@@ -902,8 +905,12 @@ export async function closePageByTargetIdViaPlaywright(opts: {
 }
 
 /**
- * Focus a page/tab by targetId using the persistent Playwright connection.
- * Used for remote profiles where HTTP-based /json/activate can be ephemeral.
+ * Confirm a tab exists. Do not raise Chrome.
+ *
+ * page.bringToFront() and Page.bringToFront restore a minimized window and
+ * steal the foreground app on Windows. Agents switch tabs on almost every
+ * step, so that would keep popping Chrome over whatever the user is doing.
+ * Later tools already address the page by targetId.
  */
 export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
@@ -914,18 +921,38 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   if (!found) {
     throw new Error("tab not found");
   }
-  const page = found.page;
-  try {
-    await page.bringToFront();
-  } catch (err) {
-    const session = await page.context().newCDPSession(page);
-    try {
-      await session.send("Page.bringToFront");
-      return;
-    } catch {
-      throw err;
-    } finally {
-      await session.detach().catch(() => {});
-    }
+}
+
+/**
+ * Create a tab without selecting it or restoring the Chrome window.
+ * Target.createTarget({ background: true }) is what Chrome uses for that.
+ */
+async function createBackgroundPage(
+  context: BrowserContext,
+  url: string,
+): Promise<Page | undefined> {
+  const existing = context.pages().find((page) => !page.isClosed());
+  if (!existing) {
+    return undefined;
   }
+  const session = await existing.context().newCDPSession(existing);
+  const before = new Set(context.pages());
+  try {
+    await session.send("Target.createTarget", {
+      url: url.trim() || "about:blank",
+      background: true,
+    });
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const created = context.pages().find((page) => !before.has(page) && !page.isClosed());
+      if (created) {
+        return created;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  } catch {
+    return undefined;
+  } finally {
+    await session.detach().catch(() => undefined);
+  }
+  return undefined;
 }

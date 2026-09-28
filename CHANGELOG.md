@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-09-27
+
+### Fixed
+
+- Selecting a tab no longer calls `bringToFront`. That restored a minimized Chrome
+  window and stole the foreground app on every tab switch.
+- Open Playwright-created tabs in the background when Chrome already has a page, so a
+  new tab does not raise the window either.
+
 ## [1.2.1] - 2026-09-27
 
 ### Fixed

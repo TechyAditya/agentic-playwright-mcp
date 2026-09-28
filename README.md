@@ -74,6 +74,9 @@ The package installs these commands:
    `targetId`.
 3. Pass the same `targetId` and `groupId` to later browser calls.
 
+Selecting a tab does not raise Chrome. If the window is minimized or behind another app,
+it stays there. Tools keep using `targetId`, so the tab does not have to be in front.
+
 Cookies, local storage, and sign-in state remain shared because all groups use the same
 Chrome profile. A person can complete an interactive sign-in, then the agent can continue
 on the same `targetId`.

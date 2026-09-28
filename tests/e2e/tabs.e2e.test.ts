@@ -21,7 +21,7 @@ describe("tab groups and tabs", () => {
     expect(output).toContain(session.targetId);
   });
 
-  it("focuses a tab by targetId", async () => {
+  it("selects a tab by targetId without raising the window", async () => {
     const output = await session.callOk("browser_tabs", { action: "select" });
     expect(output).toContain(session.targetId);
   });

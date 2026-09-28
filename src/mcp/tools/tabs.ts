@@ -318,7 +318,7 @@ export function registerBrowserTabsTool(
             targetId: resolvedTargetId,
           });
 
-          return `**Tab focused:** ${resolvedTargetId}`;
+          return `**Tab selected:** ${resolvedTargetId}`;
         }
 
         default:
