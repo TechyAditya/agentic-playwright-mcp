@@ -30,6 +30,87 @@ interface ChromeDaemonConfig {
   keepAlive?: boolean;
 }
 
+/**
+ * Chrome executables to try for a platform, in priority order. Entries containing `*` are
+ * glob patterns; the newest match wins.
+ */
+export function chromeCandidatePaths(platform: NodeJS.Platform, homeDir: string): string[] {
+  if (platform === "darwin") {
+    return [
+      // Chrome for Testing locations (prioritized for --load-extension support)
+      path.join(homeDir, ".cache/puppeteer/chrome/mac_arm-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+      path.join(homeDir, ".cache/puppeteer/chrome/mac-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+      path.join(homeDir, "Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+      "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      // Chromium and standard Chrome (fallback, may not support --load-extension)
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Comet.app/Contents/MacOS/Comet",
+    ];
+  }
+
+  if (platform === "linux") {
+    return [
+      path.join(homeDir, ".cache/puppeteer/chrome/linux-*/chrome-linux*/chrome"),
+      path.join(homeDir, ".cache/ms-playwright/chromium-*/chrome-linux/chrome"),
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/google-chrome",
+      // Google's packages install the binary under /opt/google/chrome; distros often ship
+      // only a channel-named launcher in /usr/bin (Arch's google-chrome package has no google-chrome)
+      "/usr/bin/google-chrome-stable",
+      "/opt/google/chrome/chrome",
+      "/usr/bin/google-chrome-beta",
+      "/opt/google/chrome-beta/chrome",
+      "/usr/bin/google-chrome-unstable",
+      "/opt/google/chrome-unstable/chrome",
+      "/usr/lib/chromium/chromium",
+      "/snap/bin/chromium",
+    ];
+  }
+
+  if (platform === "win32") {
+    return [
+      path.join(homeDir, ".cache\\puppeteer\\chrome\\win64-*\\chrome-win64\\chrome.exe"),
+      path.join(homeDir, ".cache\\ms-playwright\\chromium-*\\chrome-win\\chrome.exe"),
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    ];
+  }
+
+  return [];
+}
+
+export interface ChromeLookup {
+  exists: (candidate: string) => boolean;
+  glob: (pattern: string) => string[];
+}
+
+/**
+ * Return the first candidate that exists. Glob patterns resolve to their newest match.
+ */
+export function findChromeExecutable(
+  candidates: string[],
+  lookup: ChromeLookup = { exists: (p) => fs.existsSync(p), glob: (p) => globSync(p) },
+): string | null {
+  for (const candidate of candidates) {
+    if (candidate.includes("*")) {
+      const matches = lookup.glob(candidate);
+      if (matches.length > 0) {
+        // Sort to get latest version
+        matches.sort().reverse();
+        if (lookup.exists(matches[0])) {
+          return matches[0];
+        }
+      }
+    } else if (lookup.exists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 class ChromeDaemon {
   private chromeProcess: ChildProcess | null = null;
   private shuttingDown = false;
@@ -402,58 +483,11 @@ class ChromeDaemon {
   }
 
   private findChromePath(): string | null {
-    const platform = process.platform;
-    const paths: string[] = [];
-
-    if (platform === "darwin") {
-      // Chrome for Testing locations (prioritized for --load-extension support)
-      paths.push(
-        path.join(os.homedir(), ".cache/puppeteer/chrome/mac_arm-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
-        path.join(os.homedir(), ".cache/puppeteer/chrome/mac-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
-        path.join(os.homedir(), "Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
-        "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-        // Chromium and standard Chrome (fallback, may not support --load-extension)
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Comet.app/Contents/MacOS/Comet"
-      );
-    } else if (platform === "linux") {
-      paths.push(
-        path.join(os.homedir(), ".cache/puppeteer/chrome/linux-*/chrome-linux*/chrome"),
-        path.join(os.homedir(), ".cache/ms-playwright/chromium-*/chrome-linux/chrome"),
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome"
-      );
-    } else if (platform === "win32") {
-      paths.push(
-        path.join(os.homedir(), ".cache\\puppeteer\\chrome\\win64-*\\chrome-win64\\chrome.exe"),
-        path.join(os.homedir(), ".cache\\ms-playwright\\chromium-*\\chrome-win\\chrome.exe"),
-        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
-      );
+    const found = findChromeExecutable(chromeCandidatePaths(process.platform, os.homedir()));
+    if (found) {
+      this.log(`Found Chrome at: ${found}`);
     }
-
-    // Resolve glob patterns and find first existing path
-    for (const pathPattern of paths) {
-      if (pathPattern.includes("*")) {
-        // Use glob to resolve wildcards
-        const matches = globSync(pathPattern);
-        if (matches.length > 0) {
-          // Sort to get latest version
-          matches.sort().reverse();
-          if (fs.existsSync(matches[0])) {
-            this.log(`Found Chrome at: ${matches[0]}`);
-            return matches[0];
-          }
-        }
-      } else if (fs.existsSync(pathPattern)) {
-        this.log(`Found Chrome at: ${pathPattern}`);
-        return pathPattern;
-      }
-    }
-
-    return null;
+    return found;
   }
 
   private shutdown() {

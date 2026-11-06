@@ -11,6 +11,12 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import {
+  addChromeOptions,
+  chromeConfigFromOptions,
+  type ChromeConfig,
+  type ChromeOptionValues,
+} from "../chrome-options.js";
 
 const { version } = createRequire(import.meta.url)("../../package.json") as {
   version: string;
@@ -41,9 +47,10 @@ function getDaemonPid(): number | null {
   return parseInt(fs.readFileSync(DAEMON_LOCK_FILE, "utf-8").trim());
 }
 
-function startDaemon() {
+function startDaemon(config: ChromeConfig = {}) {
   if (isDaemonRunning()) {
     console.log("Daemon already running (PID:", getDaemonPid() + ")");
+    console.log("Chrome options apply when the daemon starts. Run 'apmcp-daemon restart' to apply them.");
     return;
   }
 
@@ -51,7 +58,7 @@ function startDaemon() {
   const __dirname = path.dirname(__filename);
   const daemonScript = path.join(__dirname, "chrome-daemon.js");
 
-  const daemon = spawn("node", [daemonScript], {
+  const daemon = spawn("node", [daemonScript, `--config=${JSON.stringify(config)}`], {
     detached: true,
     stdio: "ignore",
   });
@@ -104,23 +111,25 @@ program
   .description("Chrome daemon control for agentic-playwright-mcp")
   .version(version);
 
-program
-  .command("start")
-  .description("Start the Chrome daemon")
-  .action(startDaemon);
+addChromeOptions(
+  program
+    .command("start")
+    .description("Start the Chrome daemon")
+).action((options: ChromeOptionValues) => startDaemon(chromeConfigFromOptions(options)));
 
 program
   .command("stop")
   .description("Stop the Chrome daemon")
   .action(stopDaemon);
 
-program
-  .command("restart")
-  .description("Restart the Chrome daemon")
-  .action(() => {
-    stopDaemon();
-    setTimeout(startDaemon, 1000);
-  });
+addChromeOptions(
+  program
+    .command("restart")
+    .description("Restart the Chrome daemon")
+).action((options: ChromeOptionValues) => {
+  stopDaemon();
+  setTimeout(() => startDaemon(chromeConfigFromOptions(options)), 1000);
+});
 
 program
   .command("status")
