@@ -25,6 +25,9 @@ Each option has an environment variable of the same name in upper snake case.
 | `-V, --version` | | | Prints the package version. |
 | `-h, --help` | | | Prints help. |
 
+The Chrome options (`--chrome-user-data-dir` through `--keep-alive`) also work with
+`apmcp-daemon start` and `apmcp-daemon restart`. See [Chrome daemon](#chrome-daemon).
+
 ## Chrome daemon
 
 Without `--cdp-endpoint`, the server starts a Chrome daemon on the first tool call and
@@ -35,8 +38,22 @@ server reuses a daemon that is already running.
 When Chrome exits, the daemon restarts it if `--keep-alive` is set, and otherwise shuts
 itself down.
 
+Start or restart the daemon yourself with `apmcp-daemon start` or `apmcp-daemon restart`.
+Both accept the Chrome options in the table above, with the same environment variables,
+and pass them to the daemon:
+
+```bash
+apmcp-daemon start --chrome-executable /usr/bin/google-chrome-stable --keep-alive
+```
+
+If a daemon is already running, `start` leaves it as it is and does not apply the options.
+Run `apmcp-daemon restart` to apply them.
+
 The daemon looks for a Chrome binary in the puppeteer cache, then the Playwright cache,
-then the system install locations, unless `--chrome-executable` names one.
+then the system install locations, unless `--chrome-executable` names one. On Linux the
+system locations include `/usr/bin/chromium`, `/usr/bin/google-chrome`,
+`/usr/bin/google-chrome-stable`, `/opt/google/chrome/chrome`, `/usr/bin/google-chrome-beta`,
+and `/snap/bin/chromium`.
 
 ## Files and directories
 

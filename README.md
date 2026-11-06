@@ -67,6 +67,16 @@ The package installs these commands:
 - `agentic-playwright-mcp` and `apmcp` start the MCP server.
 - `agentic-playwright-mcp-daemon` and `apmcp-daemon` manage the Chrome daemon.
 
+`apmcp-daemon start` and `restart` accept the same Chrome options as the server, such as
+`--chrome-executable`, and the matching environment variables:
+
+```bash
+apmcp-daemon start --chrome-executable /usr/bin/google-chrome-stable --keep-alive
+```
+
+See the [CLI reference](https://github.com/TechyAditya/agentic-playwright-mcp/blob/main/docs/cli.md)
+for every option.
+
 ## Keep agent tabs separate
 
 1. Call `browser_tab_group` with `action: "create"`. Save the returned `groupId`.

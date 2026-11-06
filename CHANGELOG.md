@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `apmcp-daemon start` and `restart` accept the Chrome options of the server
+  (`--chrome-user-data-dir`, `--chrome-extensions`, `--chrome-executable`,
+  `--download-dir`, `--keep-alive`) and their environment variables, and pass them to the
+  daemon through `--config`.
+
+### Fixed
+
+- Find Chrome at `/usr/bin/google-chrome-stable`, `/opt/google/chrome/chrome`, the beta and
+  unstable channels, `/usr/lib/chromium/chromium` and `/snap/bin/chromium` on Linux. Arch's
+  `google-chrome` package installs only the stable launcher, so detection missed it. Existing
+  locations keep their priority.
+- Accept `--no-keep-alive` on the server CLI, as the CLI reference documents.
+
 ## [1.2.2] - 2026-09-27
 
 ### Fixed
